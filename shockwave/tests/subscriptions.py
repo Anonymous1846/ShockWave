@@ -144,7 +144,7 @@ async def scan_subscription_dos(
     """Tests connection exhaustion DoS by opening many concurrent sockets."""
     findings = []
     connections = []
-    limit = 50  # Keep it safe for scanner runs, target MVP requirement says up to 500 but we cap at 50 for normal scans
+    limit = 50  # Keep it safe for scanner runs, target requirement says up to 500 but we cap at 50 for normal scans
     
     try:
         for _ in range(limit):

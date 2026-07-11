@@ -117,7 +117,7 @@ def determine_exit_code(findings: List[GQLTFinding], fail_on: str) -> int:
 
 @click.group()
 def main():
-    """ShockWave - Open-Source GraphQL Security Testing Framework MVP"""
+    """ShockWave - Open-Source GraphQL Security Testing Framework"""
     pass
 
 @main.command()
