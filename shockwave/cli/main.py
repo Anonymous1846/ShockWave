@@ -10,7 +10,7 @@ from shockwave.schema.introspection import fetch_schema, run_introspection
 from shockwave.schema.blind import blind_reconstruct
 from shockwave.schema.fingerprint import fingerprint_engine
 from shockwave.schema.drift import load_cached_schema, save_schema_cache, compute_schema_diff
-from shockwave.schema.models import GraphQLSchema
+from shockwave.schema.models import GraphQLSchema, parse_introspection
 
 from shockwave.tests.config import scan_config
 from shockwave.tests.auth_diff import scan_auth_diff
@@ -65,7 +65,7 @@ def load_auth_config(config_path: str) -> List[Dict[str, Any]]:
 
 def print_findings_summary(findings: List[GQLTFinding], engine: str, schema: GraphQLSchema, new_fields_count: int = 0):
     click.echo("\nshockwave scan complete — target mapping finished")
-    click.echo("─────────────────────────────────────────────────────────────")
+    click.echo("-------------------------------------------------------------")
     click.echo(f"Engine detected: {engine}")
     
     q_len = len(schema.types.get(schema.query_type, GraphQLSchema()).fields) if schema.types.get(schema.query_type) else 0
@@ -74,7 +74,7 @@ def print_findings_summary(findings: List[GQLTFinding], engine: str, schema: Gra
     
     click.echo(f"Schema: {len(schema.types)} types, {q_len} queries, {m_len} mutations, {s_len} subscriptions")
     click.echo(f"New fields since last scan: {new_fields_count}")
-    click.echo("─────────────────────────────────────────────────────────────")
+    click.echo("-------------------------------------------------------------")
     
     # Severity breakdown
     severities = ["critical", "high", "medium", "low", "info"]
@@ -90,7 +90,7 @@ def print_findings_summary(findings: List[GQLTFinding], engine: str, schema: Gra
         name_str = s.upper().ljust(10)
         click.echo(f"{name_str} {count}")
         
-    click.echo("─────────────────────────────────────────────────────────────")
+    click.echo("-------------------------------------------------------------")
     click.echo(f"Total: {len(findings)} findings")
 
 def determine_exit_code(findings: List[GQLTFinding], fail_on: str) -> int:
@@ -349,7 +349,7 @@ def diff(target_url):
             added, removed = compute_schema_diff(cached, current)
             
             click.echo("Schema changes:")
-            click.echo("─────────────────────────────────────────────────────────────")
+            click.echo("-------------------------------------------------------------")
             click.echo(f"Added fields ({len(added)}):")
             for f in sorted(added):
                 click.echo(f"  + {f}")
