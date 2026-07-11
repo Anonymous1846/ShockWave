@@ -8,8 +8,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from tests.unit.test_mock_server import mock_http_server, mock_ws_server
 
 async def main():
-    http_port = 5013
-    ws_port = 5014
+    http_port = 5080
+    ws_port = 5081
     host = "127.0.0.1"
 
     print("====================================================")
