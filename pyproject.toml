@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=61.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "shockwave"
+version = "1.0.0"
+description = "ShockWave - Open-Source GraphQL Security Testing Framework MVP"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+dependencies = [
+    "click>=8.0.0",
+    "httpx>=0.25.0",
+    "deepdiff>=6.7.0",
+    "websockets>=12.0",
+    "pyyaml>=6.0.1",
+    "jinja2>=3.1.2",
+]
+
+[project.scripts]
+shockwave = "shockwave.cli.main:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["shockwave", "shockwave.*"]

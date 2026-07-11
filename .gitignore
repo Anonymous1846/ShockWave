@@ -1,0 +1,47 @@
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+.venv/
+env/
+.env/
+
+# IDE files
+.idea/
+.vscode/
+
+# Testing & coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Shockwave output directories
+gqlt-results/
+shockwave-results/
+*.sarif
+*.json
+*.html
+!benchmark/ground_truth.json
+!pyproject.toml
