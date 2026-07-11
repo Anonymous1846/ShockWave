@@ -1,0 +1,38 @@
+[
+  {
+    "rule_id": "SHOCKWAVE-CONF-001",
+    "rule_name": "Introspection enabled in production",
+    "location": "Schema",
+    "description": "Introspection is enabled, exposing the full GraphQL schema of DVGA."
+  },
+  {
+    "rule_id": "SHOCKWAVE-CONF-002",
+    "rule_name": "Field suggestions enabled",
+    "location": "Schema",
+    "description": "Suggestions are enabled, allowing reconstruction of query structures blindly."
+  },
+  {
+    "rule_id": "SHOCKWAVE-AUTH-001",
+    "rule_name": "Field-level authorization bypass",
+    "location": "Query.pastes",
+    "description": "Any authenticated or unauthenticated user can access arbitrary private pastes."
+  },
+  {
+    "rule_id": "SHOCKWAVE-RATE-001",
+    "rule_name": "Alias-based rate limit bypass",
+    "location": "Mutation.createPaste",
+    "description": "Aliased operations permit creating 500+ pastes in one request."
+  },
+  {
+    "rule_id": "SHOCKWAVE-DOS-001",
+    "rule_name": "Nested query depth DoS",
+    "location": "Query.systemHealth",
+    "description": "Deep nested structures trigger memory exhaustion/timeouts."
+  },
+  {
+    "rule_id": "SHOCKWAVE-INJ-001",
+    "rule_name": "SQL injection via GraphQL argument",
+    "location": "Query.paste.id",
+    "description": "paste query takes string input that evaluates SQL queries directly."
+  }
+]
