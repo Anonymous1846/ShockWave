@@ -127,24 +127,33 @@ async def mock_http_server(host: str, port: int, shutdown_evt: asyncio.Event):
     """Simple HTTP Mock Server mapping all mock scenarios."""
     async def handler(reader, writer):
         req_data = b""
-        # Read request headers and body
-        while True:
+        # Read request headers until \r\n\r\n
+        while b"\r\n\r\n" not in req_data:
             chunk = await reader.read(4096)
-            req_data += chunk
-            if len(chunk) < 4096:
+            if not chunk:
                 break
-                
-        # Parse body
-        body = b""
-        headers_dict = {}
+            req_data += chunk
+            
         parts = req_data.split(b"\r\n\r\n", 1)
-        if len(parts) == 2:
-            header_lines = parts[0].decode().split("\r\n")
-            body = parts[1]
-            for hl in header_lines[1:]:
-                hp = hl.split(":", 1)
-                if len(hp) == 2:
-                    headers_dict[hp[0].strip().lower()] = hp[1].strip()
+        headers_part = parts[0]
+        body = parts[1] if len(parts) > 1 else b""
+        
+        # Parse headers to find Content-Length
+        headers_dict = {}
+        header_lines = headers_part.decode(errors="ignore").split("\r\n")
+        for hl in header_lines[1:]:
+            hp = hl.split(":", 1)
+            if len(hp) == 2:
+                headers_dict[hp[0].strip().lower()] = hp[1].strip()
+                
+        content_length = int(headers_dict.get("content-length", 0))
+        
+        # Read remainder of body if not fully read
+        while len(body) < content_length:
+            chunk = await reader.read(content_length - len(body))
+            if not chunk:
+                break
+            body += chunk
 
         # Route matching
         resp_payload = {}
