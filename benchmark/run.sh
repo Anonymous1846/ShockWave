@@ -1,11 +1,5 @@
 #!/bin/sh
-echo "ShockWave Benchmark Comparison Runner"
-echo "====================================="
-echo "Comparing findings on DVGA target..."
-echo ""
-echo "| Tool         | Introspection | Auth Bypass | Nested DoS | Alias Bypass | Injection | IDOR | Total |"
-echo "|--------------|---------------|-------------|------------|--------------|-----------|------|-------|"
-echo "| graphql-cop  | Yes           | No          | Partial    | Yes          | No        | No   | 3     |"
-echo "| shockwave (Ours) | Yes           | Yes         | Yes        | Yes          | Yes       | Yes  | 14    |"
-echo ""
-echo "Comparison check completed. shockwave has detected 4.6x more findings than graphql-cop."
+# Real comparison runner. Requires a live target (see benchmark/README.md).
+# Passes all args through to the harness, e.g.:
+#   ./benchmark/run.sh --target http://localhost:5013/graphql
+python benchmark/compare.py "$@"

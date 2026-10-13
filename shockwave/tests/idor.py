@@ -2,6 +2,7 @@ import httpx
 import uuid
 import json
 from typing import Dict, Any, List, Optional
+from shockwave import net
 from shockwave.schema.models import GraphQLSchema, QueryBuilder, GraphQLField
 from shockwave.output.sarif_writer import ShockwaveFinding
 from shockwave.tests.auth_diff import execute_query
@@ -59,7 +60,7 @@ async def scan_idor(
         elif f.type_ref.is_list():
             list_fields.append(f)
 
-    async with httpx.AsyncClient(verify=False) as client:
+    async with net.client() as client:
         # Step 1: Try to harvest IDs from auth_b if available
         harvested_ids = []
         if auth_b_headers and list_fields:
@@ -97,53 +98,77 @@ async def scan_idor(
                 # Add a couple of random UUIDs to test response behavior
                 test_ids.extend([str(uuid.uuid4()) for _ in range(2)])
 
-            # Query with auth_a credentials
+            # Query each candidate ID with auth_a credentials.
+            # To avoid false positives we distinguish three cases:
+            #   1. Cross-user: A reads an ID harvested from B      -> confirmed BOLA
+            #   2. Unauthenticated: no creds read a detail object  -> confirmed BOLA
+            #   3. Sequential walk: authed A reads >=2 DISTINCT objects by guessing
+            #      IDs. A single hit may just be A's own object, so one is not enough.
+            flagged = False
+            distinct_objects = {}  # serialized_object -> tid (dedup identical/empty payloads)
+
             for tid in test_ids:
                 query_str, variables = builder.build_operation("query", df, max_depth)
                 variables[var_name] = tid
-                
-                # Check if auth_a is allowed to query this ID
+
                 res = await execute_query(url, query_str, variables, auth_a_headers, client)
                 data_val = res.get("data", {}).get(df.name) if res.get("data") else None
-                
-                # BOLA check: if response contains data for an ID belonging to B (if harvested)
-                # or general successful access of sequential IDs that aren't authenticated-owned.
-                if res.get("data") and data_val is not None:
-                    # To be a BOLA, the resource accessed must return non-null
-                    # and if we queried a cross-user harvested ID
-                    is_bola = False
-                    reason = ""
-                    
-                    if harvested_ids and tid in harvested_ids:
-                        is_bola = True
-                        reason = f"Accessed Auth B's object ID: {tid} using Auth A's credentials"
-                    elif not auth_a_headers:
-                        # Unauthenticated user accessing detail resources
-                        is_bola = True
-                        reason = f"Unauthenticated access to detail object ID: {tid}"
-                    else:
-                        # Authenticated access to arbitrary sequential IDs
-                        is_bola = True
-                        reason = f"Accessed sequential detail object ID: {tid} without ownership validation check"
+                if not (res.get("data") and data_val is not None):
+                    continue
 
-                    if is_bola:
-                        findings.append(ShockwaveFinding(
-                            id="",
-                            rule_id="SHOCKWAVE-IDOR-001",
-                            rule_name="Object-level authorization bypass",
-                            severity="high",
-                            owasp_category="API1:2023 — Broken Object Level Authorization",
-                            cwe_id="CWE-639",
-                            field_path=f"Query.{df.name}",
-                            engine="Generic",
-                            evidence_request=query_str + f"\nVariables: {json.dumps(variables)}",
-                            evidence_response=json.dumps(res)[:500],
-                            auth_context="Auth A (Lower)",
-                            confidence="confirmed",
-                            confirmation_count=1,
-                            remediation=f"Verify that the authenticated user owns or has explicit permission to view the resource represented by ID '{tid}' before executing the query.",
-                            references=["https://owasp.org/API-Security/editions/2023/en/0x07-api1-broken-object-level-authorization/"]
-                        ))
-                        break # Only report one IDOR finding per field path to avoid spam
+                # Case 1 & 2: high-confidence, flag immediately.
+                reason = None
+                if harvested_ids and tid in harvested_ids:
+                    reason = f"Accessed Auth B's object ID '{tid}' using Auth A's credentials"
+                elif not auth_a_headers:
+                    reason = f"Unauthenticated access to detail object ID '{tid}'"
+
+                if reason:
+                    findings.append(ShockwaveFinding(
+                        id="",
+                        rule_id="SHOCKWAVE-IDOR-001",
+                        rule_name="Object-level authorization bypass",
+                        severity="high",
+                        owasp_category="API1:2023 — Broken Object Level Authorization",
+                        cwe_id="CWE-639",
+                        field_path=f"Query.{df.name}",
+                        engine="Generic",
+                        evidence_request=query_str + f"\nVariables: {json.dumps(variables)}\n{reason}",
+                        evidence_response=json.dumps(res)[:500],
+                        auth_context="unauthenticated" if not auth_a_headers else "Auth A (Lower)",
+                        confidence="confirmed",
+                        confirmation_count=1,
+                        remediation=f"Verify the caller owns or may view the resource for ID '{tid}' before resolving Query.{df.name}.",
+                        references=["https://owasp.org/API-Security/editions/2023/en/0x07-api1-broken-object-level-authorization/"]
+                    ))
+                    flagged = True
+                    break  # One finding per field path
+
+                # Case 3: record distinct object payloads for post-loop analysis.
+                serialized = json.dumps(data_val, sort_keys=True)
+                distinct_objects.setdefault(serialized, tid)
+
+            # Case 3 verdict: >=2 distinct objects reachable by ID guessing under
+            # an authenticated session with no harvested IDs = likely missing
+            # ownership check (walkable), reported as medium/likely for review.
+            if not flagged and not harvested_ids and auth_a_headers and len(distinct_objects) >= 2:
+                sample_ids = list(distinct_objects.values())[:3]
+                findings.append(ShockwaveFinding(
+                    id="",
+                    rule_id="SHOCKWAVE-IDOR-001",
+                    rule_name="Object-level authorization bypass",
+                    severity="medium",
+                    owasp_category="API1:2023 — Broken Object Level Authorization",
+                    cwe_id="CWE-639",
+                    field_path=f"Query.{df.name}",
+                    engine="Generic",
+                    evidence_request=f"Query.{df.name} returned {len(distinct_objects)} distinct objects for guessed IDs {sample_ids} under one session",
+                    evidence_response="Multiple distinct objects reachable by sequential ID enumeration",
+                    auth_context="Auth A (Lower)",
+                    confidence="likely",
+                    confirmation_count=1,
+                    remediation=f"Confirm manually that Query.{df.name} enforces per-object ownership; sequential IDs should not expose other users' objects.",
+                    references=["https://owasp.org/API-Security/editions/2023/en/0x07-api1-broken-object-level-authorization/"]
+                ))
 
     return findings

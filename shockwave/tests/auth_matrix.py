@@ -4,6 +4,7 @@ import httpx
 from typing import Dict, Any, List, Optional, Tuple
 from enum import Enum
 from dataclasses import dataclass
+from shockwave import net
 from shockwave.schema.models import GraphQLSchema, QueryBuilder, GraphQLField
 from shockwave.output.sarif_writer import ShockwaveFinding
 
@@ -82,7 +83,7 @@ async def generate_auth_matrix(
     if not query_type or not query_type.fields:
         return AuthMatrix("", "", auth_names, {}), findings
 
-    async with httpx.AsyncClient(verify=False) as client:
+    async with net.client() as client:
         for field in query_type.fields:
             field_path = f"Query.{field.name}"
             matrix_fields[field_path] = {}

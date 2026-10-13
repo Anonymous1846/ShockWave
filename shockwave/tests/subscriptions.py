@@ -6,9 +6,11 @@ from typing import Dict, Any, List, Optional, Tuple
 from shockwave.schema.models import GraphQLSchema, QueryBuilder, GraphQLField
 from shockwave.output.sarif_writer import ShockwaveFinding
 
-# Protocol names
-WS_SUB_PROTOCOL_MODERN = "graphql-ws"
-WS_SUB_PROTOCOL_LEGACY = "graphql-transport-ws"  # Or legacy subscriptions-transport-ws protocol fallback
+# Protocol subprotocol tokens. The modern graphql-ws library negotiates
+# "graphql-transport-ws"; the legacy subscriptions-transport-ws library
+# negotiates "graphql-ws". (These were previously labeled backwards.)
+WS_SUB_PROTOCOL_MODERN = "graphql-transport-ws"
+WS_SUB_PROTOCOL_LEGACY = "graphql-ws"
 
 def resolve_ws_url(http_url: str) -> str:
     parsed = urlparse(http_url)
@@ -28,14 +30,14 @@ async def attempt_ws_handshake(
         extra_headers.update(headers)
         
     try:
-        ws = await websockets.connect(
-            ws_url,
-            subprotocols=[protocol],
-            extra_headers=extra_headers,
-            ping_interval=None,
-            open_timeout=5
-        )
-        
+        # websockets renamed extra_headers -> additional_headers in v14 and
+        # removed the old name. Try new first, fall back for v12/13.
+        base_kwargs = dict(subprotocols=[protocol], ping_interval=None, open_timeout=5)
+        try:
+            ws = await websockets.connect(ws_url, additional_headers=extra_headers, **base_kwargs)
+        except TypeError:
+            ws = await websockets.connect(ws_url, extra_headers=extra_headers, **base_kwargs)
+
         # connection_init payload
         init_payload = {"type": "connection_init", "payload": {}}
         if headers:

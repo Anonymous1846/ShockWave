@@ -50,6 +50,8 @@ class GraphQLField:
     type_ref: GraphQLTypeRef
     description: Optional[str] = None
     args: List[GraphQLArgument] = field(default_factory=list)
+    is_deprecated: bool = False
+    deprecation_reason: Optional[str] = None
 
 @dataclass
 class GraphQLType:
@@ -114,7 +116,11 @@ def parse_introspection(introspection_json: Dict[str, Any]) -> GraphQLSchema:
                 a_default = a_data.get("defaultValue")
                 args.append(GraphQLArgument(name=a_name, type_ref=a_type, description=a_desc, default_value=a_default))
                 
-            fields.append(GraphQLField(name=f_name, type_ref=f_type, description=f_desc, args=args))
+            fields.append(GraphQLField(
+                name=f_name, type_ref=f_type, description=f_desc, args=args,
+                is_deprecated=bool(f_data.get("isDeprecated")),
+                deprecation_reason=f_data.get("deprecationReason"),
+            ))
             
         # Parse inputFields
         input_fields = []
