@@ -67,3 +67,73 @@ def compute_schema_diff(old_schema: Optional[GraphQLSchema], new_schema: GraphQL
     removed = old_fields - new_fields
 
     return added, removed
+
+
+def _field_map(schema: GraphQLSchema) -> Dict[str, Any]:
+    """Flatten a schema to {"Type.field": GraphQLField} for comparison."""
+    out = {}
+    for t_name, gtype in schema.types.items():
+        for f in gtype.fields:
+            out[f"{t_name}.{f.name}"] = f
+    return out
+
+
+def compute_schema_changes(
+    old_schema: Optional[GraphQLSchema], new_schema: GraphQLSchema
+) -> Dict[str, Any]:
+    """Richer diff than compute_schema_diff: also reports type changes on kept
+    fields and argument changes (added/removed/required-ness). Returns a dict
+    with keys: added_fields, removed_fields, added_types, removed_types,
+    type_changes, arg_changes. All values are sorted lists of strings.
+    """
+    added_f, removed_f = compute_schema_diff(old_schema, new_schema)
+    result = {
+        "added_fields": sorted(added_f),
+        "removed_fields": sorted(removed_f),
+        "added_types": [],
+        "removed_types": [],
+        "type_changes": [],
+        "arg_changes": [],
+        "newly_deprecated": [],
+    }
+    if not old_schema:
+        result["added_types"] = sorted(new_schema.types.keys())
+        result["newly_deprecated"] = sorted(
+            f"{p}: {nf.deprecation_reason or 'deprecated'}"
+            for p, nf in _field_map(new_schema).items() if nf.is_deprecated
+        )
+        return result
+
+    result["added_types"] = sorted(set(new_schema.types) - set(old_schema.types))
+    result["removed_types"] = sorted(set(old_schema.types) - set(new_schema.types))
+
+    old_map = _field_map(old_schema)
+    new_map = _field_map(new_schema)
+
+    for path in sorted(set(old_map) & set(new_map)):
+        of, nf = old_map[path], new_map[path]
+
+        old_t = of.type_ref.to_type_string() if of.type_ref else "?"
+        new_t = nf.type_ref.to_type_string() if nf.type_ref else "?"
+        if old_t != new_t:
+            result["type_changes"].append(f"{path}: {old_t} -> {new_t}")
+
+        old_args = {a.name: a for a in of.args}
+        new_args = {a.name: a for a in nf.args}
+        for a in sorted(set(new_args) - set(old_args)):
+            result["arg_changes"].append(f"{path}: +arg {a}: {new_args[a].type_ref.to_type_string()}")
+        for a in sorted(set(old_args) - set(new_args)):
+            result["arg_changes"].append(f"{path}: -arg {a}")
+        for a in sorted(set(old_args) & set(new_args)):
+            o_req = old_args[a].type_ref.is_required()
+            n_req = new_args[a].type_ref.is_required()
+            if o_req != n_req:
+                state = "now required" if n_req else "now optional"
+                result["arg_changes"].append(f"{path}: arg {a} {state}")
+
+        # Field became deprecated since the baseline
+        if nf.is_deprecated and not of.is_deprecated:
+            result["newly_deprecated"].append(f"{path}: {nf.deprecation_reason or 'deprecated'}")
+
+    result["newly_deprecated"] = sorted(result["newly_deprecated"])
+    return result

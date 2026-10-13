@@ -1,5 +1,6 @@
 import httpx
 from typing import Dict, Any, Optional
+from shockwave import net
 from shockwave.schema.models import GraphQLSchema, parse_introspection
 
 INTROSPECTION_QUERY = """
@@ -15,6 +16,8 @@ query IntrospectionQuery {
       fields(includeDeprecated: true) {
         name
         description
+        isDeprecated
+        deprecationReason
         args {
           name
           description
@@ -38,6 +41,8 @@ query IntrospectionQuery {
       enumValues(includeDeprecated: true) {
         name
         description
+        isDeprecated
+        deprecationReason
       }
     }
   }
@@ -89,7 +94,7 @@ async def run_introspection(
     if headers:
         req_headers.update(headers)
         
-    async with httpx.AsyncClient(verify=False) as client:
+    async with net.client() as client:
         response = await client.post(
             url,
             json=payload,

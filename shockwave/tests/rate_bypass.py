@@ -1,6 +1,7 @@
 import httpx
 import json
 from typing import Dict, Any, List, Optional, Tuple
+from shockwave import net
 from shockwave.schema.models import GraphQLSchema
 from shockwave.output.sarif_writer import ShockwaveFinding
 
@@ -8,33 +9,41 @@ AUTH_MUTATION_PATTERNS = ["login", "signin", "authenticate", "verifyotp", "reset
 
 def find_target_field(schema: GraphQLSchema) -> Tuple[str, str, Dict[str, Any]]:
     """
-    Finds a suitable authentication mutation or query to target.
-    Returns (operation_type, field_name, sample_arguments)
+    Pick a field to hammer with aliases. The alias test only cares whether the
+    server caps aliases, so prefer a field that reliably EXECUTES: a no-arg
+    query field (ideally scalar) beats an auth mutation that returns null/errors
+    for bad credentials and makes the bypass look like it failed.
+    Returns (operation_type, field_name, sample_arguments).
     """
-    # 1. Search in Mutations
+    query_type = schema.types.get(schema.query_type or "Query")
     mutation_type = schema.types.get(schema.mutation_type or "Mutation")
+
+    # 1. No-arg SCALAR query field — reliably executes without a selection set
+    #    (object/list fields would be invalid as a bare alias).
+    def is_scalar(field):
+        gt = schema.types.get(field.type_ref.get_deep_name())
+        return gt is None or gt.kind not in ("OBJECT", "INTERFACE", "UNION")
+
+    if query_type and query_type.fields:
+        for field in query_type.fields:
+            if not field.args and is_scalar(field):
+                return "query", field.name, {}
+
+    # 2. Auth mutation (classic alias/credential bypass target).
     if mutation_type and mutation_type.fields:
         for field in mutation_type.fields:
             if any(p in field.name.lower() for p in AUTH_MUTATION_PATTERNS):
-                # Generate simple args: email/password or default
                 args = {}
                 for arg in field.args:
                     args[arg.name] = "test@example.com" if "email" in arg.name.lower() else "wrong_pass"
                 return "mutation", field.name, args
 
-    # 2. Check for any mutation
+    # 3. Any query field, then any mutation.
+    if query_type and query_type.fields:
+        return "query", query_type.fields[0].name, {}
     if mutation_type and mutation_type.fields:
         field = mutation_type.fields[0]
-        args = {arg.name: "test" for arg in field.args}
-        return "mutation", field.name, args
-
-    # 3. Fallback to a Query field
-    query_type = schema.types.get(schema.query_type or "Query")
-    if query_type and query_type.fields:
-        for field in query_type.fields:
-            if any(p in field.name.lower() for p in AUTH_MUTATION_PATTERNS):
-                return "query", field.name, {}
-        return "query", query_type.fields[0].name, {}
+        return "mutation", field.name, {arg.name: "test" for arg in field.args}
 
     return "query", "__typename", {}
 
@@ -84,7 +93,7 @@ async def scan_rate_bypass(
     if headers:
         req_headers.update(headers)
         
-    async with httpx.AsyncClient(verify=False) as client:
+    async with net.client() as client:
         # Test 1: Alias-based rate limiting bypass
         # We try with the specified batch size (default 500)
         query = build_aliased_query(op_type, field_name, args, batch_size)

@@ -2,6 +2,7 @@ import httpx
 import re
 import os
 from typing import Dict, Any, List, Set, Optional
+from shockwave import net
 from shockwave.schema.models import GraphQLSchema, GraphQLType, GraphQLField, GraphQLTypeRef
 
 # Resolve the absolute path to wordlist.txt
@@ -22,7 +23,7 @@ async def send_raw_query(
     req_headers = {"Content-Type": "application/json"}
     if headers:
         req_headers.update(headers)
-    async with httpx.AsyncClient(verify=False) as client:
+    async with net.client() as client:
         try:
             res = await client.post(url, json={"query": query}, headers=req_headers, timeout=10)
             return res.json()
@@ -62,15 +63,20 @@ async def blind_reconstruct(
     limit_fields: int = 50
 ) -> GraphQLSchema:
     """
-    Brute-forces the schema using suggestions and errors to construct Query, Mutation, and types.
+    Brute-forces the schema when introspection is disabled.
+
+    Field existence is detected by error-type discrimination: a
+    "Cannot query field X" error means X is absent; any other outcome
+    (success, "must have a selection", "unknown argument", etc.) means X
+    exists. This works even when field suggestions are OFF. When suggestions
+    are ON they are harvested as a bonus to widen coverage beyond the wordlist.
     """
     schema = GraphQLSchema(query_type="Query", mutation_type="Mutation", subscription_type=None)
     schema.types["Query"] = GraphQLType(name="Query", kind="OBJECT")
     schema.types["Mutation"] = GraphQLType(name="Mutation", kind="OBJECT")
 
-    # If suggestions are not enabled, we cannot reconstruct the schema blindly in a reasonable time.
-    if not await check_suggestions_enabled(url, headers):
-        return schema
+    # Informational only — no longer a hard gate. Suggestions merely augment.
+    await check_suggestions_enabled(url, headers)
 
     wordlist = load_wordlist()
     found_query_fields = set()

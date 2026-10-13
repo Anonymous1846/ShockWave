@@ -175,6 +175,16 @@ async def mock_http_server(host: str, port: int, shutdown_evt: asyncio.Event):
         # Scenario Routing
         if "__schema" in query:
             resp_payload = MOCK_INTROSPECTION_DATA
+        elif "alias_0" in query:
+            # Breadth DoS alias check (checked early: these batch patterns are
+            # unambiguous and may alias an otherwise-routed field).
+            resp_payload = {"data": {f"alias_{i}": "Query" for i in range(250)}}
+        elif "a0000" in query:
+            # Aliasing rate bypass check
+            resp_payload = {"data": {f"a{i:04d}": {"token": "mock"} for i in range(100)}}
+        elif isinstance(payload, list) and len(payload) > 50:
+            # Array batch rate bypass check
+            resp_payload = [{"data": {"login": "mock"}} for _ in range(len(payload))]
         elif "abcdefghijklmnop" in query or "non_existent_field_suggestion_probe" in query:
             # Suggestions
             resp_payload = {
@@ -208,15 +218,6 @@ async def mock_http_server(host: str, port: int, shutdown_evt: asyncio.Event):
                 resp_payload = {"errors": [{"message": "Internal Server Error"}]}
             else:
                 resp_payload = {"data": {"user": {"friends": []}}}
-        elif "alias_0" in query:
-            # Breadth DoS alias check
-            resp_payload = {"data": {f"alias_{i}": "Query" for i in range(250)}}
-        elif "a0000" in query:
-            # Aliasing rate bypass check
-            resp_payload = {"data": {f"a{i:04d}": {"token": "mock"} for i in range(100)}}
-        elif isinstance(payload, list) and len(payload) > 50:
-            # Array batch rate bypass check
-            resp_payload = [{"data": {"login": "mock"}} for _ in range(len(payload))]
         elif "paste(" in query or "paste " in query:
             # IDOR detail checks
             var_id = variables.get("paste_id") or "1"

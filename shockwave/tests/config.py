@@ -1,5 +1,6 @@
 import httpx
 from typing import Dict, Any, List, Optional
+from shockwave import net
 from shockwave.schema.models import GraphQLSchema
 from shockwave.output.sarif_writer import ShockwaveFinding
 
@@ -19,7 +20,7 @@ async def scan_config(
     # Finding 1: Introspection check
     # We send the introspection query to see if it responds with schema
     introspection_query = "query { __schema { types { name } } }"
-    async with httpx.AsyncClient(verify=False) as client:
+    async with net.client() as client:
         try:
             res = await client.post(url, json={"query": introspection_query}, headers=req_headers, timeout=10)
             if res.status_code == 200 and "__schema" in str(res.json()):
@@ -43,16 +44,30 @@ async def scan_config(
         except Exception:
             pass
 
-        # Finding 2: Field suggestions check
-        suggestion_query = "query { __non_existent_field_suggestion_probe }"
+        # Finding 2: Field suggestions check.
+        # Engines (Graphene, Apollo, ...) only emit "Did you mean" when the
+        # probed name is CLOSE to a real field, so derive a near-miss from an
+        # actual schema field (drop the last char) instead of a random string.
+        probe_fields = []
+        q_type = schema.types.get(schema.query_type or "Query") if schema else None
+        if q_type and q_type.fields:
+            real = next((f.name for f in q_type.fields if len(f.name) >= 4), q_type.fields[0].name)
+            # Append a char: a near-miss that is guaranteed NOT a real field
+            # (dropping a char can collide with another real field, e.g.
+            # "pastes" -> "paste"), so the engine emits "Did you mean <real>".
+            probe_fields.append(real + "x")
+        probe_fields.append("__non_existent_field_suggestion_probe")  # static fallback
+
+        suggestion_query = f"query {{ {probe_fields[0]} }}"
+        has_suggestion = False
+        res_data = {}
         try:
-            res = await client.post(url, json={"query": suggestion_query}, headers=req_headers, timeout=10)
-            res_data = res.json()
-            errors = res_data.get("errors", [])
-            has_suggestion = False
-            for err in errors:
-                if "Did you mean" in err.get("message", ""):
+            for pf in probe_fields:
+                res = await client.post(url, json={"query": f"query {{ {pf} }}"}, headers=req_headers, timeout=10)
+                res_data = res.json()
+                if any("did you mean" in e.get("message", "").lower() for e in res_data.get("errors", [])):
                     has_suggestion = True
+                    suggestion_query = f"query {{ {pf} }}"
                     break
             if has_suggestion:
                 findings.append(ShockwaveFinding(

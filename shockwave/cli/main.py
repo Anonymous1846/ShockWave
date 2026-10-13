@@ -6,10 +6,14 @@ import yaml
 import time
 from typing import Dict, Any, List, Optional, Tuple
 
+from shockwave import net
+from shockwave.plugins import PluginContext, load_plugins, run_plugins
 from shockwave.schema.introspection import fetch_schema, run_introspection
 from shockwave.schema.blind import blind_reconstruct
 from shockwave.schema.fingerprint import fingerprint_engine
-from shockwave.schema.drift import load_cached_schema, save_schema_cache, compute_schema_diff
+from shockwave.schema.drift import (
+    load_cached_schema, save_schema_cache, compute_schema_diff, compute_schema_changes
+)
 from shockwave.schema.models import GraphQLSchema, parse_introspection
 
 from shockwave.tests.config import scan_config
@@ -134,20 +138,28 @@ def main():
 @click.option("--collaborator-url", help="URL for SSRF detection")
 @click.option("--cache-dir", help="Schema cache directory")
 @click.option("--no-cache", is_flag=True, help="Disable schema caching. Force fresh introspection.")
-@click.option("--rate-limit", default=20, type=int, help="Max requests per second to target")
+@click.option("--rate-limit", default=20, type=int, help="Max requests per second to target (0 = unlimited)")
+@click.option("--max-concurrency", default=1, type=int, help="Max in-flight requests (1 = sequential, safe default; raise it to speed up multi-threaded targets)")
+@click.option("--jitter", default=0.0, type=float, help="Random extra delay (0..N seconds) added per request to blend traffic")
+@click.option("--test-mutations", is_flag=True, help="Also diff mutations in auth tests. WARNING: executes mutations (side effects). Use on disposable targets only.")
+@click.option("--plugins", "plugins_dir", type=click.Path(exists=True, file_okay=False), help="Directory of custom check plugins (*.py). Loading runs their code — use a trusted dir.")
 @click.option("--timeout", default=30, type=int, help="Per-request timeout in seconds")
 @click.option("--verbose", is_flag=True, help="Debug logging")
 @click.option("--quiet", is_flag=True, help="Console output suppressed except final summary")
 def scan(
-    target_url, auth_a, auth_b, auth_config, scope, depth, batch_size, 
-    output, output_dir, fail_on, collaborator_url, cache_dir, 
-    no_cache, rate_limit, timeout, verbose, quiet
+    target_url, auth_a, auth_b, auth_config, scope, depth, batch_size,
+    output, output_dir, fail_on, collaborator_url, cache_dir,
+    no_cache, rate_limit, max_concurrency, jitter, test_mutations, plugins_dir, timeout, verbose, quiet
 ):
     """Run an automated GraphQL security scan against TARGET_URL."""
     async def run_scan():
         # Setup output dir
         os.makedirs(output_dir, exist_ok=True)
-        
+
+        # 0. Configure the global request throttle (wires --rate-limit/--jitter
+        #    into every scanner's HTTP client).
+        net.configure(rate_per_sec=rate_limit, jitter=jitter, concurrency=max_concurrency)
+
         # 1. Parse auth headers
         headers_a = parse_header_string(auth_a)
         headers_b = parse_header_string(auth_b)
@@ -188,10 +200,17 @@ def scan(
             if not quiet:
                 click.echo("[*] Attempting blind schema reconstruction via suggestions...")
             try:
-                schema = await blind_reconstruct(target_url, headers_a)
+                # Hard time budget: blind brute-force can otherwise flood a slow
+                # target for minutes. Bound it so the scan never hangs.
+                schema = await asyncio.wait_for(
+                    blind_reconstruct(target_url, headers_a), timeout=45
+                )
                 if not quiet:
                     q_fields = len(schema.types.get("Query", GraphQLSchema()).fields) if schema.types.get("Query") else 0
                     click.echo(f"[+] Reconstructed {q_fields} Query fields blindly.")
+            except asyncio.TimeoutError:
+                click.echo("[!] Blind reconstruction timed out (45s); target too slow or suggestions off.")
+                raise click.Abort()
             except Exception as e:
                 click.echo(f"[!] Schema reconstruction failed: {e}")
                 raise click.Abort()
@@ -200,12 +219,23 @@ def scan(
             click.echo("[-] Critical: Failed to acquire or reconstruct a valid schema.")
             os._exit(3) # Schema acquisition failed
 
-        # 3. Fingerprint Engine
-        engine, engine_info = await fingerprint_engine(target_url, headers_a)
+        # 3. Fingerprint Engine (schema passed for introspection-based signals)
+        engine, engine_info = await fingerprint_engine(target_url, headers_a, schema)
         
         # 4. Orchestrate Scans
         findings = []
-        
+
+        async def bounded(coro, label, timeout=90):
+            """Run a scan phase under a wall-clock budget so a slow/pathological
+            target (e.g. a single-threaded one fuzzed into molasses) can never
+            hang the whole scan. Returns [] on timeout; earlier phases keep their
+            findings."""
+            try:
+                return await asyncio.wait_for(coro, timeout=timeout)
+            except asyncio.TimeoutError:
+                if not quiet: click.echo(f"[!] {label} phase hit its {timeout}s budget; reporting partial results.")
+                return []
+
         # Run Config scans
         if scope in ("full", "config"):
             if not quiet: click.echo("[*] Running configuration checks...")
@@ -216,7 +246,7 @@ def scan(
         if scope in ("full", "auth"):
             if not quiet: click.echo("[*] Running authorization tests...")
             if headers_a and headers_b:
-                findings.extend(await scan_auth_diff(target_url, schema, headers_a, headers_b, max_depth=3))
+                findings.extend(await scan_auth_diff(target_url, schema, headers_a, headers_b, max_depth=3, test_mutations=test_mutations))
             
             # Auth contexts list for matrix
             contexts = []
@@ -238,23 +268,33 @@ def scan(
         # Run DoS & Rate bypass scans
         if scope in ("full", "dos"):
             if not quiet: click.echo("[*] Running DoS & rate-limit bypass tests...")
-            findings.extend(await scan_dos(target_url, schema, headers_a))
-            findings.extend(await scan_rate_bypass(target_url, schema, headers_a, batch_size))
-            
+            findings.extend(await bounded(scan_dos(target_url, schema, headers_a), "DoS"))
+            findings.extend(await bounded(scan_rate_bypass(target_url, schema, headers_a, batch_size), "Rate-bypass", timeout=60))
+
         # Run Injection scans
         if scope in ("full", "injection"):
             if not quiet: click.echo("[*] Running injection vulnerability tests...")
-            findings.extend(await scan_injection(target_url, schema, headers_a, collaborator_url))
-            
+            findings.extend(await bounded(
+                scan_injection(target_url, schema, headers_a, collaborator_url, test_mutations=test_mutations),
+                "Injection"))
+
         # Run IDOR scans
         if scope in ("full", "idor"):
             if not quiet: click.echo("[*] Running IDOR/BOLA tests...")
-            findings.extend(await scan_idor(target_url, schema, headers_a, headers_b, max_depth=3))
-            
+            findings.extend(await bounded(scan_idor(target_url, schema, headers_a, headers_b, max_depth=3), "IDOR"))
+
         # Run Subscription scans
         if scope in ("full", "subscription"):
             if not quiet: click.echo("[*] Running WebSocket subscription security tests...")
-            findings.extend(await scan_subscriptions(target_url, schema, headers_a, headers_b))
+            findings.extend(await bounded(scan_subscriptions(target_url, schema, headers_a, headers_b), "Subscription", timeout=60))
+
+        # Run custom plugins (opt-in via --plugins)
+        if plugins_dir:
+            runners = load_plugins(plugins_dir)
+            if runners:
+                if not quiet: click.echo(f"[*] Running {len(runners)} custom plugin(s)...")
+                ctx = PluginContext(url=target_url, schema=schema, headers=headers_a)
+                findings.extend(await run_plugins(runners, ctx))
 
         # Scope drift handling: filter findings to only report issues on new fields
         if scope == "drift":
@@ -282,7 +322,8 @@ def scan(
             
         # Console output
         if "console" in out_types or not quiet:
-            print_findings_summary(findings, engine, schema, len(new_fields))
+            engine_display = f"{engine} (confidence: {engine_info.get('confidence', 'low')}, score: {engine_info.get('score', 0)})"
+            print_findings_summary(findings, engine_display, schema, len(new_fields))
             
         # Exit codes logic
         exit_code = determine_exit_code(findings, fail_on)
@@ -346,32 +387,81 @@ def diff(target_url):
         try:
             raw = await run_introspection(target_url, None, 30)
             current = parse_introspection(raw)
-            added, removed = compute_schema_diff(cached, current)
-            
+            changes = compute_schema_changes(cached, current)
+
             click.echo("Schema changes:")
             click.echo("-------------------------------------------------------------")
-            click.echo(f"Added fields ({len(added)}):")
-            for f in sorted(added):
-                click.echo(f"  + {f}")
-            click.echo(f"Removed fields ({len(removed)}):")
-            for f in sorted(removed):
-                click.echo(f"  - {f}")
+
+            def _section(title, items, marker):
+                click.echo(f"{title} ({len(items)}):")
+                for it in items:
+                    click.echo(f"  {marker} {it}")
+
+            _section("Added fields", changes["added_fields"], "+")
+            _section("Removed fields", changes["removed_fields"], "-")
+            _section("Added types", changes["added_types"], "+")
+            _section("Removed types", changes["removed_types"], "-")
+            _section("Field type changes", changes["type_changes"], "~")
+            _section("Argument changes", changes["arg_changes"], "~")
+            _section("Newly deprecated", changes["newly_deprecated"], "!")
         except Exception as e:
             click.echo(f"Error diffing schema: {e}")
             os._exit(3)
     asyncio.run(run_diff())
 
 @main.command()
-def benchmark():
-    """Run benchmark logic."""
-    click.echo("ShockWave Benchmark Comparison Runner")
-    click.echo("=====================================")
-    click.echo("Comparing findings on DVGA target...\n")
-    click.echo("| Tool             | Introspection | Auth Bypass | Nested DoS | Alias Bypass | Injection | IDOR | Total |")
-    click.echo("|------------------|---------------|-------------|------------|--------------|-----------|------|-------|")
-    click.echo("| graphql-cop      | Yes           | No          | Partial    | Yes          | No        | No   | 3     |")
-    click.echo("| shockwave (Ours) | Yes           | Yes         | Yes        | Yes          | Yes       | Yes  | 14    |\n")
-    click.echo("Comparison check completed. shockwave has detected 4.6x more findings than graphql-cop.")
+@click.argument("target_url")
+@click.option("--auth-a", help='Primary auth header: "Authorization: Bearer token"')
+@click.option("--auth-b", help='Secondary auth header for diff/IDOR testing')
+@click.option("--rate-limit", default=20, type=int, help="Max requests per second (0 = unlimited)")
+def benchmark(target_url, auth_a, auth_b, rate_limit):
+    """Run every scanner against TARGET_URL and tabulate real finding counts
+    per category (e.g. a DVGA instance at http://localhost:5013/graphql)."""
+    async def run_bench():
+        net.configure(rate_per_sec=rate_limit)
+        headers_a = parse_header_string(auth_a)
+        headers_b = parse_header_string(auth_b)
+
+        click.echo(f"[*] Benchmarking {target_url} ...")
+        try:
+            raw = await run_introspection(target_url, headers_a, 30)
+            schema = parse_introspection(raw)
+        except Exception as e:
+            click.echo(f"[-] Introspection failed ({e}); attempting blind reconstruction...")
+            schema = await blind_reconstruct(target_url, headers_a)
+        if not schema or not schema.types:
+            click.echo("[-] Could not acquire a schema. Aborting benchmark.")
+            os._exit(3)
+
+        findings = []
+        findings += await scan_config(target_url, schema, headers_a)
+        findings += await scan_dos(target_url, schema, headers_a)
+        findings += await scan_rate_bypass(target_url, schema, headers_a, 500)
+        findings += await scan_injection(target_url, schema, headers_a, None)
+        findings += await scan_idor(target_url, schema, headers_a, headers_b)
+        if headers_a and headers_b:
+            findings += await scan_auth_diff(target_url, schema, headers_a, headers_b)
+        findings += await scan_subscriptions(target_url, schema, headers_a, headers_b)
+
+        # Tabulate by rule-id prefix
+        categories = {
+            "Config (CONF)": "SHOCKWAVE-CONF",
+            "Auth bypass (AUTH)": "SHOCKWAVE-AUTH",
+            "DoS (DOS)": "SHOCKWAVE-DOS",
+            "Rate bypass (RATE)": "SHOCKWAVE-RATE",
+            "Injection (INJ)": "SHOCKWAVE-INJ",
+            "IDOR/BOLA (IDOR)": "SHOCKWAVE-IDOR",
+        }
+        click.echo("\nShockWave finding counts")
+        click.echo("------------------------------------------")
+        for label, prefix in categories.items():
+            count = sum(1 for f in findings if f.rule_id.startswith(prefix))
+            click.echo(f"{label.ljust(24)} {count}")
+        click.echo("------------------------------------------")
+        click.echo(f"{'Total'.ljust(24)} {len(findings)}")
+        os._exit(0)
+
+    asyncio.run(run_bench())
 
 if __name__ == "__main__":
     main()

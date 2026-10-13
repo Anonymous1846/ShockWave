@@ -37,6 +37,10 @@ env/
 .coverage
 htmlcov/
 
+# Cloned competitor tools + generated report for the comparison benchmark
+benchmark/.tools/
+benchmark/RESULTS.md
+
 # Shockwave output directories
 gqlt-results/
 shockwave-results/

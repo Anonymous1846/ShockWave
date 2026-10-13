@@ -1,6 +1,7 @@
 import httpx
 import time
 from typing import Dict, Any, List, Tuple, Set, Optional
+from shockwave import net
 from shockwave.schema.models import GraphQLSchema, GraphQLType, GraphQLField
 from shockwave.output.sarif_writer import ShockwaveFinding
 
@@ -110,7 +111,7 @@ async def scan_dos(
     if headers:
         req_headers.update(headers)
         
-    async with httpx.AsyncClient(verify=False) as client:
+    async with net.client() as client:
         last_duration = 0.0
         
         for d in depths:
