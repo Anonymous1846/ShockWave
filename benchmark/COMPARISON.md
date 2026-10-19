@@ -72,15 +72,25 @@ Ground-truth detail (ShockWave, unauthenticated):
 | Fix | Before | After | Status |
 |---|---|---|---|
 | Engine fingerprint | `Apollo Server` (low confidence) — **wrong** | `graphene (Python)` (confidence **high**, score 9) — correct | **benchmark-confirmed on fresh DVGA** |
-| Field-suggestion probe (CONF-002) | missed (random probe, no "Did you mean") | near-miss of a real field triggers the suggestion | unit-validated; logic traced against DVGA's real error format |
-| Alias rate-bypass target (RATE-001) | targeted `login` mutation → null/errors | targets a no-arg scalar query field → executes | unit-validated; DVGA confirmed `{a0:systemHealth a1:systemHealth}` executes |
+| Field-suggestion probe (CONF-002) | missed (random probe, no "Did you mean") | near-miss of a real field triggers the suggestion | **benchmark-confirmed on live DVGA (2026-10-19): CONF-002 now ✅** |
+| Alias rate-bypass target (RATE-001) | targeted `login` mutation → null/errors | targets a no-arg scalar query field → executes | unit-validated; DVGA confirmed `{a0:systemHealth a1:systemHealth}` executes (full benchmark run capped this phase — not yet re-confirmed end-to-end) |
 | Blind reconstruction | could hang indefinitely | 45s time budget, clean abort | benchmark-confirmed |
 
-The fingerprint fix is confirmed end-to-end on a live fresh DVGA. CONF-002 and
-RATE-001 fixes are validated by unit tests and by tracing DVGA's real responses;
-they were not re-captured in a full clean benchmark because the single-threaded
-target degrades between runs (documented above). Expected recall after the
-detection fixes: **5/6 unauthenticated** (all but AUTH-001).
+Fingerprint and CONF-002 fixes are confirmed end-to-end on live DVGA (fingerprint
+`graphene`/high on a warm fresh container; CONF-002 ✅ on the 2026-10-19 run).
+RATE-001 is unit-validated but its benchmark phase capped under load, so it is
+not yet end-to-end confirmed.
+
+### Measurement caveat (important)
+A full multi-tool run against DVGA is **not a reliable timing/recall benchmark**:
+DVGA is a single-threaded dev server and degrades under the combined scan. On
+the 2026-10-19 run the competitor canary alone proved the environment was
+~40× slow (`graphql-cop` 1.6s → 60s, `graphw00f` 0.9s → 120s), which caps
+ShockWave's later phases and drops findings that pass on a clean run
+(e.g. INJ-001). Trust **per-tool runs on a pristine container** over a combined
+one. Clean baseline recall: 3/6; with CONF-002 now confirmed, 4/6
+unauthenticated (CONF-001, CONF-002, DOS-001, INJ-001 on a non-degraded run);
+AUTH-001 needs auth contexts.
 
 ## What ShockWave does better
 
