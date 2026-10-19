@@ -102,9 +102,12 @@ detection fixes: **5/6 unauthenticated** (all but AUTH-001).
 - **Fingerprint depth:** accurate now, but no version detection yet (graphw00f
   has some).
 - **Blind recovery** is wordlist-bound; clairvoyance discovers more.
-- **Missing cheap recon checks** graphql-cop has: GET-based queries, CSRF,
-  directive-overload DoS.
 - **Not yet battle-tested** at scale.
+
+### Recently closed
+- GET-based query, CSRF (form-encoded body), and directive-overload DoS checks
+  (`SHOCKWAVE-CONF-003/004/005`) — graphql-cop parity; added, pending a clean
+  DVGA re-benchmark to confirm end-to-end.
 
 ## Reproduce
 

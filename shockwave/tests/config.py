@@ -90,4 +90,88 @@ async def scan_config(
         except Exception:
             pass
 
+        auth_hdr = dict(headers) if headers else {}
+
+        def _executed(res) -> bool:
+            """True only if the server actually executed the probe (returned a
+            __typename value) — strict, to avoid flagging empty/echoed bodies."""
+            try:
+                return res.status_code == 200 and bool((res.json().get("data") or {}).get("__typename"))
+            except Exception:
+                return False
+
+        # Finding 3: GET-based query execution (CSRF surface — a GET that
+        # executes can be triggered cross-site without a preflight).
+        try:
+            res = await client.get(url, params={"query": "query{__typename}"}, headers=auth_hdr, timeout=10)
+            if _executed(res):
+                findings.append(ShockwaveFinding(
+                    id="", rule_id="SHOCKWAVE-CONF-003",
+                    rule_name="GraphQL query execution over HTTP GET",
+                    severity="medium",
+                    owasp_category="API8:2023 — Security Misconfiguration",
+                    cwe_id="CWE-352", field_path="Schema", engine="Generic",
+                    evidence_request=f"GET {url}?query=query{{__typename}}",
+                    evidence_response=str(res.text)[:300],
+                    auth_context="No Auth" if not headers else "Provided Auth",
+                    confidence="confirmed", confirmation_count=1,
+                    remediation="Reject GET for queries (or at least for mutations); require POST with a JSON content type to prevent cross-site request forgery.",
+                    references=["https://cheatsheetseries.owasp.org/cheatsheets/GraphQL_Cheat_Sheet.html#csrf-prevention"]
+                ))
+        except Exception:
+            pass
+
+        # Finding 4: execution via a non-preflighted content type (CSRF).
+        try:
+            res = await client.post(
+                url, content="query=query{__typename}",
+                headers={**auth_hdr, "Content-Type": "application/x-www-form-urlencoded"}, timeout=10)
+            if _executed(res):
+                findings.append(ShockwaveFinding(
+                    id="", rule_id="SHOCKWAVE-CONF-004",
+                    rule_name="GraphQL accepts form-encoded body (CSRF)",
+                    severity="medium",
+                    owasp_category="API8:2023 — Security Misconfiguration",
+                    cwe_id="CWE-352", field_path="Schema", engine="Generic",
+                    evidence_request=f"POST {url} (application/x-www-form-urlencoded) body: query=query{{__typename}}",
+                    evidence_response=str(res.text)[:300],
+                    auth_context="No Auth" if not headers else "Provided Auth",
+                    confidence="confirmed", confirmation_count=1,
+                    remediation="Only accept application/json for GraphQL; a simple (non-preflighted) content type lets a cross-site form submit a request.",
+                    references=["https://cheatsheetseries.owasp.org/cheatsheets/GraphQL_Cheat_Sheet.html#csrf-prevention"]
+                ))
+        except Exception:
+            pass
+
+        # Finding 5: directive overloading (no limit on repeated directives =
+        # parser-amplification DoS vector). Flag only if the server PARSED all
+        # of them (executed, or returned per-directive errors) rather than
+        # rejecting with a size/complexity limit.
+        try:
+            overloaded = "query { __typename " + ("@skip(if: true) " * 500) + "}"
+            res = await client.post(url, json={"query": overloaded}, headers=req_headers, timeout=15)
+            body = res.text.lower()
+            rejected = any(x in body for x in ("too many", "maximum", "limit", "complexity", "request too large"))
+            try:
+                errs = res.json().get("errors", []) or []
+            except Exception:
+                errs = []
+            parsed_all = _executed(res) or (res.status_code == 200 and errs and not rejected)
+            if parsed_all and not rejected:
+                findings.append(ShockwaveFinding(
+                    id="", rule_id="SHOCKWAVE-CONF-005",
+                    rule_name="Directive overloading (no directive limit)",
+                    severity="low",
+                    owasp_category="API4:2023 — Unrestricted Resource Consumption",
+                    cwe_id="CWE-400", field_path="Schema", engine="Generic",
+                    evidence_request="query { __typename @skip(if: true) x500 }",
+                    evidence_response=str(res.text)[:200],
+                    auth_context="No Auth" if not headers else "Provided Auth",
+                    confidence="likely", confirmation_count=1,
+                    remediation="Cap the number of directives (and overall query size/complexity) accepted per request.",
+                    references=["https://cheatsheetseries.owasp.org/cheatsheets/GraphQL_Cheat_Sheet.html#query-cost-analysis"]
+                ))
+        except Exception:
+            pass
+
     return findings
