@@ -68,6 +68,14 @@ shockwave scan https://target/graphql \
   --output sarif,json --fail-on high
 ```
 
+Auth is any header, so cookie / API-key / session targets work too — and
+`--auth-a` is repeatable to combine headers (e.g. cookie + CSRF token):
+
+```bash
+shockwave scan https://target/graphql \
+  --auth-a "Cookie: session=<id>" --auth-a "X-CSRF-Token: <tok>"
+```
+
 ## Commands
 
 | Command | Purpose |

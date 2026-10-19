@@ -102,6 +102,13 @@ def test_fingerprint_scoring_picks_best_and_avoids_collision():
     assert scores.get("Hasura", 0) >= 5
 
 
+def test_parse_headers_merges_and_handles_empty():
+    from shockwave.cli.main import parse_headers
+    assert parse_headers(()) is None
+    assert parse_headers(("Cookie: s=1",)) == {"Cookie": "s=1"}
+    assert parse_headers(("Cookie: s=1", "X-CSRF: tok")) == {"Cookie": "s=1", "X-CSRF": "tok"}
+
+
 def test_load_plugins_finds_run(tmp_path):
     plugin = tmp_path / "my_check.py"
     plugin.write_text("async def run(ctx):\n    return []\n", encoding="utf-8")
