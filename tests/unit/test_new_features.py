@@ -102,6 +102,13 @@ def test_fingerprint_scoring_picks_best_and_avoids_collision():
     assert scores.get("Hasura", 0) >= 5
 
 
+def test_boolean_blind_hit():
+    from shockwave.tests.injection import _boolean_blind_hit
+    assert _boolean_blind_hit({"id": "1"}, None) is True      # TRUE got row, FALSE none
+    assert _boolean_blind_hit(None, None) is False            # neither returned
+    assert _boolean_blind_hit({"id": "1"}, {"id": "1"}) is False  # identical => not injectable
+
+
 def test_parse_headers_merges_and_handles_empty():
     from shockwave.cli.main import parse_headers
     assert parse_headers(()) is None
