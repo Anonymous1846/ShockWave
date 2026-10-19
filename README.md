@@ -143,7 +143,16 @@ Measured against DVGA (Damn Vulnerable GraphQL App). Verified results:
 `benchmark/` holds the head-to-head harness (`compare.py`) and the DVGA ground
 truth. Use a **fresh** DVGA container per run.
 
+## Contributing
+
+Contributions welcome via pull request — see [`CONTRIBUTING.md`](CONTRIBUTING.md).
+Commits must be DCO signed-off (`git commit -s`); the owner reviews every change
+via [`CODEOWNERS`](.github/CODEOWNERS), and merged contributors are credited in
+[`AUTHORS`](AUTHORS).
+
 ## License
 
-Proprietary — see [`LICENSE`](LICENSE). Review permitted; modification/usage is
-restricted per that file.
+Licensed under the **Apache License 2.0** — see [`LICENSE`](LICENSE) and
+[`NOTICE`](NOTICE). You may use, modify, and redistribute ShockWave freely,
+provided you keep the copyright attribution and state any changes you make to
+the files. Copyright 2026 Sharath Sunil.
