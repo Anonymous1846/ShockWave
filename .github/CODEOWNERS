@@ -1,0 +1,5 @@
+# Every change requires the owner's review. With branch protection + "Require
+# review from Code Owners" enabled, no PR merges without @Anonymous1846.
+# This is how you stay informed of changes to the canonical repo.
+
+*       @Anonymous1846
