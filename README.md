@@ -68,6 +68,14 @@ shockwave scan https://target/graphql \
   --output sarif,json --fail-on high
 ```
 
+Auth is any header, so cookie / API-key / session targets work too — and
+`--auth-a` is repeatable to combine headers (e.g. cookie + CSRF token):
+
+```bash
+shockwave scan https://target/graphql \
+  --auth-a "Cookie: session=<id>" --auth-a "X-CSRF-Token: <tok>"
+```
+
 ## Commands
 
 | Command | Purpose |
@@ -116,9 +124,24 @@ Loading a plugin executes its code — only use a directory you trust.
 
 ## Benchmark / comparison
 
-`benchmark/` holds the head-to-head harness (`compare.py`), the DVGA ground
-truth, and the full comparison study (`COMPARISON.md`). Use a **fresh** DVGA
-container per run — it degrades under repeated heavy scanning.
+Measured against DVGA (Damn Vulnerable GraphQL App). Verified results:
+
+- **Unique coverage:** on DVGA, ShockWave is the only scanner that reports
+  IDOR/BOLA; `graphql-cop`, `graphw00f` and `Clairvoyance` don't attempt
+  object-level access testing.
+- **Engine fingerprint:** correctly identifies DVGA as **Graphene** with high
+  confidence (benchmark-confirmed) — `graphw00f`-grade on that target.
+- **Recall vs ground truth (unauthenticated):** 4/6 on a clean run
+  (introspection, field-suggestions, nested-DoS, SQLi); AUTH-001 needs auth
+  contexts, RATE-001 is unit-validated.
+
+> Caveat: DVGA is single-threaded and degrades under a combined multi-tool
+> scan (the competitor canary alone slowed ~40×), so trust **per-tool runs on a
+> fresh container** over a combined one. Full study, methodology and the honest
+> weaknesses list: [`benchmark/COMPARISON.md`](benchmark/COMPARISON.md).
+
+`benchmark/` holds the head-to-head harness (`compare.py`) and the DVGA ground
+truth. Use a **fresh** DVGA container per run.
 
 ## License
 

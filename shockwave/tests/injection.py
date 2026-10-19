@@ -41,6 +41,12 @@ PATH_TRAVERSAL_PAYLOADS = [
     "..\\..\\..\\windows\\win.ini"
 ]
 
+def _boolean_blind_hit(true_val, false_val) -> bool:
+    """Boolean-blind SQLi signal: the TRUE condition returned data and the
+    FALSE condition returned something different (typically null/empty)."""
+    return true_val is not None and true_val != false_val
+
+
 async def execute_fuzz_query(
     url: str,
     query: str,
@@ -210,7 +216,37 @@ async def scan_injection(
                                 remediation="Parameterize all database inputs; a controllable response delay proves the argument reaches the SQL engine unsanitized.",
                                 references=["https://owasp.org/www-community/attacks/Blind_SQL_Injection"]
                             ))
+                            sqli_found = True
                             break
+
+                    # 1c. Boolean-based blind SQLi (engine-agnostic — works on
+                    # SQLite etc. that have no sleep primitive for time-based).
+                    # A TRUE condition returns the row; a FALSE one does not.
+                    if not sqli_found:
+                        t_q, t_v = builder.build_operation(op_type, field)
+                        t_v[var_name] = "1' AND '1'='1"
+                        f_q, f_v = builder.build_operation(op_type, field)
+                        f_v[var_name] = "1' AND '1'='2"
+                        _, t_res, _ = await execute_fuzz_query(url, t_q, t_v, headers, client)
+                        _, f_res, _ = await execute_fuzz_query(url, f_q, f_v, headers, client)
+                        t_val = t_res.get("data", {}).get(field.name) if t_res.get("data") else None
+                        f_val = f_res.get("data", {}).get(field.name) if f_res.get("data") else None
+                        if _boolean_blind_hit(t_val, f_val):
+                            out.append(ShockwaveFinding(
+                                id="", rule_id="SHOCKWAVE-INJ-001",
+                                rule_name="Boolean-based blind SQL injection via GraphQL argument",
+                                severity="critical", owasp_category="API3:2023 — Injection",
+                                cwe_id="CWE-89",
+                                field_path=f"{op_type.capitalize()}.{field.name}.{arg.name}",
+                                engine="Generic",
+                                evidence_request=f"TRUE: {json.dumps(t_v)}\nFALSE: {json.dumps(f_v)}",
+                                evidence_response="TRUE condition returned data; FALSE condition did not — input alters the WHERE clause.",
+                                auth_context="No Auth" if not headers else "Provided Auth",
+                                confidence="likely", confirmation_count=1,
+                                remediation="Parameterize database inputs; a response that depends on an injected boolean condition proves the argument reaches the SQL engine unsanitized.",
+                                references=["https://owasp.org/www-community/attacks/Blind_SQL_Injection"]
+                            ))
+                            sqli_found = True
 
                     # 2. NoSQLi Tests (MongoDB) — differential detection.
                     # Baseline with the benign sample value, then inject an

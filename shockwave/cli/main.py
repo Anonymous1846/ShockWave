@@ -33,11 +33,21 @@ from shockwave.output.json_writer import write_json_report
 def parse_header_string(header_str: Optional[str]) -> Optional[Dict[str, str]]:
     if not header_str:
         return None
-    # Parse e.g. "Authorization: Bearer token"
+    # Parse e.g. "Authorization: Bearer token" (also "Cookie: ...", "X-API-Key: ...")
     parts = header_str.split(":", 1)
     if len(parts) == 2:
         return {parts[0].strip(): parts[1].strip()}
     return None
+
+def parse_headers(values) -> Optional[Dict[str, str]]:
+    """Merge repeated 'Key: Value' strings into one header dict (or None).
+    Lets one auth context carry e.g. a Cookie and a CSRF header."""
+    merged: Dict[str, str] = {}
+    for v in values or ():
+        h = parse_header_string(v)
+        if h:
+            merged.update(h)
+    return merged or None
 
 def load_auth_config(config_path: str) -> List[Dict[str, Any]]:
     """Loads auth config YAML file and returns parsed contexts with header dicts."""
@@ -126,8 +136,8 @@ def main():
 
 @main.command()
 @click.argument("target_url")
-@click.option("--auth-a", help='Primary auth header: "Authorization: Bearer token"')
-@click.option("--auth-b", help='Secondary auth header for diff testing')
+@click.option("--auth-a", multiple=True, help='Primary auth header, repeatable: "Authorization: Bearer ..." / "Cookie: session=..." / "X-API-Key: ..."')
+@click.option("--auth-b", multiple=True, help='Secondary auth context for diff/IDOR testing (repeatable)')
 @click.option("--auth-config", type=click.Path(exists=True), help='YAML file defining named auth contexts (enables matrix)')
 @click.option("--scope", default="full", type=click.Choice(["full", "auth", "dos", "injection", "idor", "subscription", "config", "drift"]), help="Which attack class(es) to run.")
 @click.option("--depth", default=20, type=int, help="Max nesting depth for DoS tests")
@@ -161,9 +171,9 @@ def scan(
         net.configure(rate_per_sec=rate_limit, jitter=jitter, concurrency=max_concurrency)
 
         # 1. Parse auth headers
-        headers_a = parse_header_string(auth_a)
-        headers_b = parse_header_string(auth_b)
-        
+        headers_a = parse_headers(auth_a)
+        headers_b = parse_headers(auth_b)
+
         # 2. Acquire Schema
         if not quiet:
             click.echo(f"[*] Acquiring schema from {target_url}...")
